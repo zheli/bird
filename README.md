@@ -1,6 +1,6 @@
-# bird
+# bird 🐦
 
-A command-line tool for posting tweets and replies via Twitter/X's GraphQL API.
+`bird` is a focused command-line tool for posting tweets, replying, and reading tweet details using Twitter/X's GraphQL API. It keeps setup minimal while supporting common workflows for automation or scripting.
 
 ## Installation
 
@@ -11,6 +11,12 @@ pnpm run binary  # Creates the 'bird' executable
 ```
 
 ## Usage
+
+### Commands at a glance
+- `bird tweet "<text>"` — post a new tweet.
+- `bird reply <tweet-id-or-url> "<text>"` — reply to a tweet using its ID or URL.
+- `bird read <tweet-id-or-url> [--json]` — fetch tweet content as text or JSON.
+- `bird check` — show which credentials are available and where they were sourced from.
 
 ### Post a tweet
 
@@ -44,7 +50,7 @@ bird check
 
 ## Authentication
 
-The tool resolves credentials in the following order of priority:
+`bird` resolves credentials in the following order of priority:
 
 1. **CLI arguments** (highest priority)
    ```bash
@@ -90,6 +96,6 @@ pnpm run lint:fix
 
 ## Notes
 
-- Chrome cookie extraction requires macOS (uses `sqlite3` and `security` CLI tools)
-- The keychain access may block when running over SSH - use env vars instead
-- Twitter may rotate GraphQL query IDs - update `src/lib/twitter-client.ts` if needed
+- Chrome cookie extraction requires macOS (uses `sqlite3` and `security` CLI tools).
+- The keychain access may block when running over SSH; use environment variables instead.
+- Twitter/X may rotate GraphQL query IDs; update `src/lib/twitter-client.ts` if requests start failing.

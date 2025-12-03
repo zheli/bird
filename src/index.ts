@@ -619,8 +619,11 @@ program
   .description('Show which Twitter account the current credentials belong to')
   .action(async () => {
     const opts = program.opts();
-    const sweetistics = resolveSweetisticsConfig(opts);
-    const engine = resolveEngineMode(opts.engine);
+    const sweetistics = resolveSweetisticsConfig({
+      sweetisticsApiKey: opts.sweetisticsApiKey || config.sweetisticsApiKey,
+      sweetisticsBaseUrl: opts.sweetisticsBaseUrl || config.sweetisticsBaseUrl,
+    });
+    const engine = resolveEngineMode(opts.engine || config.engine);
     const useSweetistics = shouldUseSweetistics(engine, Boolean(sweetistics.apiKey));
 
     if (useSweetistics) {
@@ -640,6 +643,7 @@ program
         if (result.user.email) {
           console.log(`📧 ${result.user.email}`);
         }
+        console.log(`⚙️  Engine: ${engine}`);
         return;
       }
 
@@ -650,7 +654,8 @@ program
     const { cookies, warnings } = await resolveCredentials({
       authToken: opts.authToken,
       ct0: opts.ct0,
-      chromeProfile: opts.chromeProfile,
+      chromeProfile: opts.chromeProfile || config.chromeProfile,
+      firefoxProfile: opts.firefoxProfile || config.firefoxProfile,
     });
 
     for (const warning of warnings) {
@@ -672,6 +677,7 @@ program
     if (result.success && result.user) {
       console.log(`🙋 Logged in as @${result.user.username} (${result.user.name})`);
       console.log(`🪪 User ID: ${result.user.id}`);
+      console.log(`⚙️  Engine: ${engine}`);
     } else {
       console.error(`❌ Failed to determine current user: ${result.error ?? 'Unknown error'}`);
       process.exit(1);

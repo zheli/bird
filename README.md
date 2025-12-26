@@ -10,6 +10,12 @@ npm install -g @steipete/bird
 pnpm add -g @steipete/bird
 ```
 
+Homebrew (macOS, prebuilt Bun binary):
+
+```bash
+brew install steipete/tap/bird
+```
+
 ## Quickstart
 
 ```bash

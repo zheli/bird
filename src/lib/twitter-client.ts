@@ -4,6 +4,7 @@
 
 import type { TwitterCookies } from './cookies.js';
 import queryIds from './query-ids.json' with { type: 'json' };
+import { runtimeQueryIds } from './runtime-query-ids.js';
 
 const TWITTER_API_BASE = 'https://x.com/i/api/graphql';
 const TWITTER_GRAPHQL_POST_URL = 'https://x.com/i/api/graphql';
@@ -27,13 +28,7 @@ const QUERY_IDS: Record<OperationName, string> = {
   ...(queryIds as Partial<Record<OperationName, string>>),
 };
 
-const TWEET_DETAIL_QUERY_IDS = Array.from(
-  new Set([QUERY_IDS.TweetDetail, '97JF30KziU00483E_8elBA', 'aFvUsJm2c-oDkJV75blV6g']),
-);
-
-const SEARCH_TIMELINE_QUERY_IDS = Array.from(
-  new Set([QUERY_IDS.SearchTimeline, 'M1jEez78PEfVfbQLvlWMvQ', '5h0kNbk3ii97rmfY6CdgAA', 'Tp1sewRU1AsZpBWhqCZicQ']),
-);
+const TARGET_QUERY_ID_OPERATIONS = Object.keys(FALLBACK_QUERY_IDS) as Array<OperationName>;
 
 type GraphqlTweetResult = {
   rest_id?: string;
@@ -264,6 +259,32 @@ export class TwitterClient {
       options.userAgent ||
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
     this.timeoutMs = options.timeoutMs;
+  }
+
+  private async getQueryId(operationName: OperationName): Promise<string> {
+    const cached = await runtimeQueryIds.getQueryId(operationName);
+    return cached ?? QUERY_IDS[operationName];
+  }
+
+  private async refreshQueryIds(): Promise<void> {
+    if (process.env.NODE_ENV === 'test') {
+      return;
+    }
+    try {
+      await runtimeQueryIds.refresh(TARGET_QUERY_ID_OPERATIONS, { force: true });
+    } catch {
+      // ignore refresh failures; callers will fall back to baked-in IDs
+    }
+  }
+
+  private async getTweetDetailQueryIds(): Promise<string[]> {
+    const primary = await this.getQueryId('TweetDetail');
+    return Array.from(new Set([primary, '97JF30KziU00483E_8elBA', 'aFvUsJm2c-oDkJV75blV6g']));
+  }
+
+  private async getSearchTimelineQueryIds(): Promise<string[]> {
+    const primary = await this.getQueryId('SearchTimeline');
+    return Array.from(new Set([primary, 'M1jEez78PEfVfbQLvlWMvQ', '5h0kNbk3ii97rmfY6CdgAA', 'Tp1sewRU1AsZpBWhqCZicQ']));
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
@@ -738,7 +759,8 @@ export class TwitterClient {
       fieldToggles: JSON.stringify(this.buildArticleFieldToggles()),
     });
 
-    const url = `${TWITTER_API_BASE}/${QUERY_IDS.UserArticlesTweets}/UserArticlesTweets?${params}`;
+    const queryId = await this.getQueryId('UserArticlesTweets');
+    const url = `${TWITTER_API_BASE}/${queryId}/UserArticlesTweets?${params}`;
 
     try {
       const response = await this.fetchWithTimeout(url, { method: 'GET', headers: this.getHeaders() });
@@ -875,32 +897,51 @@ export class TwitterClient {
       };
 
       let lastError: string | undefined;
+      let had404 = false;
 
-      for (const queryId of TWEET_DETAIL_QUERY_IDS) {
-        const url = `${TWITTER_API_BASE}/${queryId}/TweetDetail?${params}`;
-        const response = await this.fetchWithTimeout(url, {
-          method: 'GET',
-          headers: this.getHeaders(),
-        });
+      const tryOnce = async () => {
+        const queryIds = await this.getTweetDetailQueryIds();
 
-        if (response.status !== 404) {
-          return await parseResponse(response);
+        for (const queryId of queryIds) {
+          const url = `${TWITTER_API_BASE}/${queryId}/TweetDetail?${params}`;
+          const response = await this.fetchWithTimeout(url, {
+            method: 'GET',
+            headers: this.getHeaders(),
+          });
+
+          if (response.status !== 404) {
+            return await parseResponse(response);
+          }
+
+          had404 = true;
+
+          const postResponse = await this.fetchWithTimeout(`${TWITTER_API_BASE}/${queryId}/TweetDetail`, {
+            method: 'POST',
+            headers: this.getHeaders(),
+            body: JSON.stringify({ variables, features, queryId }),
+          });
+
+          if (postResponse.status !== 404) {
+            return await parseResponse(postResponse);
+          }
+
+          lastError = 'HTTP 404';
         }
 
-        const postResponse = await this.fetchWithTimeout(`${TWITTER_API_BASE}/${queryId}/TweetDetail`, {
-          method: 'POST',
-          headers: this.getHeaders(),
-          body: JSON.stringify({ variables, features, queryId }),
-        });
+        return { success: false as const, error: lastError ?? 'Unknown error fetching tweet detail' };
+      };
 
-        if (postResponse.status !== 404) {
-          return await parseResponse(postResponse);
-        }
-
-        lastError = 'HTTP 404';
+      const firstAttempt = await tryOnce();
+      if (firstAttempt.success) {
+        return firstAttempt;
       }
 
-      return { success: false, error: lastError ?? 'Unknown error fetching tweet detail' };
+      if (had404) {
+        await this.refreshQueryIds();
+        return await tryOnce();
+      }
+
+      return firstAttempt;
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
@@ -1070,13 +1111,14 @@ export class TwitterClient {
     variables: Record<string, unknown>,
     features: Record<string, boolean>,
   ): Promise<TweetResult> {
-    const queryId = QUERY_IDS.CreateTweet;
-    const urlWithOperation = `${TWITTER_API_BASE}/${queryId}/CreateTweet`;
+    let queryId = await this.getQueryId('CreateTweet');
+    let urlWithOperation = `${TWITTER_API_BASE}/${queryId}/CreateTweet`;
 
-    const body = JSON.stringify({ variables, features, queryId });
+    const buildBody = () => JSON.stringify({ variables, features, queryId });
+    let body = buildBody();
 
     try {
-      const response = await this.fetchWithTimeout(urlWithOperation, {
+      let response = await this.fetchWithTimeout(urlWithOperation, {
         method: 'POST',
         headers: this.getHeaders(),
         body,
@@ -1085,27 +1127,40 @@ export class TwitterClient {
       // Twitter increasingly prefers POST to /i/api/graphql with queryId in the payload.
       // If the operation URL 404s, retry the generic endpoint.
       if (response.status === 404) {
-        const retry = await this.fetchWithTimeout(TWITTER_GRAPHQL_POST_URL, {
+        await this.refreshQueryIds();
+        queryId = await this.getQueryId('CreateTweet');
+        urlWithOperation = `${TWITTER_API_BASE}/${queryId}/CreateTweet`;
+        body = buildBody();
+
+        response = await this.fetchWithTimeout(urlWithOperation, {
           method: 'POST',
           headers: this.getHeaders(),
           body,
         });
 
-        if (!retry.ok) {
-          const text = await retry.text();
-          return { success: false, error: `HTTP ${retry.status}: ${text.slice(0, 200)}` };
+        if (response.status === 404) {
+          const retry = await this.fetchWithTimeout(TWITTER_GRAPHQL_POST_URL, {
+            method: 'POST',
+            headers: this.getHeaders(),
+            body,
+          });
+
+          if (!retry.ok) {
+            const text = await retry.text();
+            return { success: false, error: `HTTP ${retry.status}: ${text.slice(0, 200)}` };
+          }
+
+          const data = (await retry.json()) as CreateTweetResponse;
+
+          if (data.errors && data.errors.length > 0) {
+            return { success: false, error: data.errors.map((e) => e.message).join(', ') };
+          }
+
+          const tweetId = data.data?.create_tweet?.tweet_results?.result?.rest_id;
+          if (tweetId) return { success: true, tweetId };
+
+          return { success: false, error: 'Tweet created but no ID returned' };
         }
-
-        const data = (await retry.json()) as CreateTweetResponse;
-
-        if (data.errors && data.errors.length > 0) {
-          return { success: false, error: data.errors.map((e) => e.message).join(', ') };
-        }
-
-        const tweetId = data.data?.create_tweet?.tweet_results?.result?.rest_id;
-        if (tweetId) return { success: true, tweetId };
-
-        return { success: false, error: 'Tweet created but no ID returned' };
       }
 
       if (!response.ok) {
@@ -1158,57 +1213,63 @@ export class TwitterClient {
 
     const features = this.buildSearchFeatures();
 
-    let lastError: string | undefined;
+    const params = new URLSearchParams({
+      variables: JSON.stringify(variables),
+    });
 
-    for (const queryId of SEARCH_TIMELINE_QUERY_IDS) {
-      const params = new URLSearchParams({
-        variables: JSON.stringify(variables),
-      });
-      const url = `${TWITTER_API_BASE}/${queryId}/SearchTimeline?${params}`;
+    const tryOnce = async () => {
+      let lastError: string | undefined;
+      let had404 = false;
+      const queryIds = await this.getSearchTimelineQueryIds();
 
-      try {
-        const response = await this.fetchWithTimeout(url, {
-          method: 'POST',
-          headers: this.getHeaders(),
-          body: JSON.stringify({ features, queryId }),
-        });
+      for (const queryId of queryIds) {
+        const url = `${TWITTER_API_BASE}/${queryId}/SearchTimeline?${params}`;
 
-        if (response.status === 404) {
-          lastError = `HTTP ${response.status}`;
-          continue;
-        }
+        try {
+          const response = await this.fetchWithTimeout(url, {
+            method: 'POST',
+            headers: this.getHeaders(),
+            body: JSON.stringify({ features, queryId }),
+          });
 
-        if (!response.ok) {
-          const text = await response.text();
-          return { success: false, error: `HTTP ${response.status}: ${text.slice(0, 200)}` };
-        }
+          if (response.status === 404) {
+            had404 = true;
+            lastError = `HTTP ${response.status}`;
+            continue;
+          }
 
-        const data = (await response.json()) as {
-          data?: {
-            search_by_raw_query?: {
-              search_timeline?: {
-                timeline?: {
-                  instructions?: Array<{
-                    entries?: Array<{
-                      content?: {
-                        itemContent?: {
-                          tweet_results?: {
-                            result?: {
-                              rest_id?: string;
-                              legacy?: {
-                                full_text?: string;
-                                created_at?: string;
-                                reply_count?: number;
-                                retweet_count?: number;
-                                favorite_count?: number;
-                                in_reply_to_status_id_str?: string;
-                              };
-                              core?: {
-                                user_results?: {
-                                  result?: {
-                                    legacy?: {
-                                      screen_name?: string;
-                                      name?: string;
+          if (!response.ok) {
+            const text = await response.text();
+            return { success: false as const, error: `HTTP ${response.status}: ${text.slice(0, 200)}`, had404 };
+          }
+
+          const data = (await response.json()) as {
+            data?: {
+              search_by_raw_query?: {
+                search_timeline?: {
+                  timeline?: {
+                    instructions?: Array<{
+                      entries?: Array<{
+                        content?: {
+                          itemContent?: {
+                            tweet_results?: {
+                              result?: {
+                                rest_id?: string;
+                                legacy?: {
+                                  full_text?: string;
+                                  created_at?: string;
+                                  reply_count?: number;
+                                  retweet_count?: number;
+                                  favorite_count?: number;
+                                  in_reply_to_status_id_str?: string;
+                                };
+                                core?: {
+                                  user_results?: {
+                                    result?: {
+                                      legacy?: {
+                                        screen_name?: string;
+                                        name?: string;
+                                      };
                                     };
                                   };
                                 };
@@ -1216,30 +1277,42 @@ export class TwitterClient {
                             };
                           };
                         };
-                      };
+                      }>;
                     }>;
-                  }>;
+                  };
                 };
               };
             };
+            errors?: Array<{ message: string }>;
           };
-          errors?: Array<{ message: string }>;
-        };
 
-        if (data.errors && data.errors.length > 0) {
-          return { success: false, error: data.errors.map((e) => e.message).join(', ') };
+          if (data.errors && data.errors.length > 0) {
+            return { success: false as const, error: data.errors.map((e) => e.message).join(', '), had404 };
+          }
+
+          const instructions = data.data?.search_by_raw_query?.search_timeline?.timeline?.instructions;
+          const tweets = this.parseTweetsFromInstructions(instructions);
+
+          return { success: true as const, tweets, had404 };
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
         }
-
-        const instructions = data.data?.search_by_raw_query?.search_timeline?.timeline?.instructions;
-        const tweets = this.parseTweetsFromInstructions(instructions);
-
-        return { success: true, tweets };
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
       }
+
+      return { success: false as const, error: lastError ?? 'Unknown error fetching search results', had404 };
+    };
+
+    const firstAttempt = await tryOnce();
+    if (firstAttempt.success) return { success: true, tweets: firstAttempt.tweets };
+
+    if (firstAttempt.had404) {
+      await this.refreshQueryIds();
+      const secondAttempt = await tryOnce();
+      if (secondAttempt.success) return { success: true, tweets: secondAttempt.tweets };
+      return { success: false, error: secondAttempt.error };
     }
 
-    return { success: false, error: lastError ?? 'Unknown error fetching search results' };
+    return { success: false, error: firstAttempt.error };
   }
 
   /**

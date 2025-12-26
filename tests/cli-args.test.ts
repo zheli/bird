@@ -5,6 +5,7 @@ describe('cli-args', () => {
   const known = new Set([
     'tweet',
     'reply',
+    'query-ids',
     'read',
     'replies',
     'thread',

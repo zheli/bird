@@ -91,6 +91,11 @@ describe('TwitterClient', () => {
           text: async () => '',
         })
         .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          text: async () => '',
+        })
+        .mockResolvedValueOnce({
           ok: true,
           status: 200,
           json: async () => ({
@@ -111,12 +116,12 @@ describe('TwitterClient', () => {
 
       expect(result.success).toBe(true);
       expect(result.tweetId).toBe('1234567890');
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
 
       const [firstUrl] = mockFetch.mock.calls[0];
-      const [secondUrl] = mockFetch.mock.calls[1];
+      const [thirdUrl] = mockFetch.mock.calls[2];
       expect(String(firstUrl)).toContain('/CreateTweet');
-      expect(String(secondUrl)).toBe('https://x.com/i/api/graphql');
+      expect(String(thirdUrl)).toBe('https://x.com/i/api/graphql');
     });
 
     it('should handle API errors', async () => {

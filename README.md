@@ -31,6 +31,9 @@ bird replies 1234567890123456789
 bird search "from:steipete" -n 5
 bird mentions -n 5
 bird mentions --user @steipete -n 5
+
+# Refresh GraphQL query IDs cache (no rebuild)
+bird query-ids --fresh
 ```
 
 ## Commands
@@ -38,6 +41,7 @@ bird mentions --user @steipete -n 5
 - `bird tweet "<text>"` — post a new tweet.
 - `bird reply <tweet-id-or-url> "<text>"` — reply to a tweet using its ID or URL.
 - `bird help [command]` — show help (or help for a subcommand).
+- `bird query-ids [--fresh] [--json]` — inspect or refresh cached GraphQL query IDs.
 - `bird read <tweet-id-or-url> [--json]` — fetch tweet content as text or JSON.
 - `bird <tweet-id-or-url> [--json]` — shorthand for `read` when only a URL or ID is provided.
 - `bird replies <tweet-id-or-url> [--json]` — list replies to a tweet.
@@ -100,6 +104,16 @@ Environment shortcuts:
 - `--json` prints raw tweet objects for read/replies/thread/search/mentions.
 - `read` returns full text for Notes and Articles when present.
 - Use `--plain` for stable, script-friendly output (no emoji, no color).
+
+## Query IDs (GraphQL)
+
+X rotates GraphQL query IDs frequently. `bird` caches refreshed IDs on disk and retries automatically on 404s.
+
+Refresh on demand:
+
+```bash
+bird query-ids --fresh
+```
 
 Exit codes:
 - `0`: success

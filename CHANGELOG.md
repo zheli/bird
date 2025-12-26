@@ -5,6 +5,7 @@
 ### Added
 - Output controls: `--plain`, `--no-emoji`, `--no-color` (respects `NO_COLOR`).
 - `help` command: `bird help <command>`.
+- Runtime GraphQL query ID refresh: `bird query-ids --fresh` (cached on disk; auto-retry on 404).
 
 ### Fixed
 - CLI `--version`: read version from `package.json`/`VERSION` (no hardcoded string) + append git sha when available.

@@ -79,6 +79,44 @@ describe('TwitterClient', () => {
 
       const body = JSON.parse(options.body);
       expect(body.variables.tweet_text).toBe('Hello world!');
+      expect(body.features.rweb_video_screen_enabled).toBe(true);
+      expect(body.features.creator_subscriptions_tweet_preview_api_enabled).toBe(true);
+    });
+
+    it('retries CreateTweet via /i/api/graphql when operation URL 404s', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          text: async () => '',
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              create_tweet: {
+                tweet_results: {
+                  result: {
+                    rest_id: '1234567890',
+                  },
+                },
+              },
+            },
+          }),
+        });
+
+      const client = new TwitterClient({ cookies: validCookies });
+      const result = await client.tweet('Hello world!');
+
+      expect(result.success).toBe(true);
+      expect(result.tweetId).toBe('1234567890');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const [firstUrl] = mockFetch.mock.calls[0];
+      const [secondUrl] = mockFetch.mock.calls[1];
+      expect(String(firstUrl)).toContain('/CreateTweet');
+      expect(String(secondUrl)).toBe('https://x.com/i/api/graphql');
     });
 
     it('should handle API errors', async () => {
@@ -178,6 +216,8 @@ describe('TwitterClient', () => {
       const body = JSON.parse(options.body);
       expect(body.variables.reply.in_reply_to_tweet_id).toBe('1234567890');
       expect(body.variables.tweet_text).toBe('This is a reply');
+      expect(body.features.rweb_video_screen_enabled).toBe(true);
+      expect(body.features.creator_subscriptions_tweet_preview_api_enabled).toBe(true);
     });
   });
 

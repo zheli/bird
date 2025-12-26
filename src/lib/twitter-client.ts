@@ -6,6 +6,7 @@ import type { TwitterCookies } from './cookies.js';
 import queryIds from './query-ids.json' with { type: 'json' };
 
 const TWITTER_API_BASE = 'https://x.com/i/api/graphql';
+const TWITTER_GRAPHQL_POST_URL = 'https://x.com/i/api/graphql';
 
 // Query IDs rotate frequently; the values in query-ids.json are refreshed by
 // scripts/update-query-ids.ts. The fallback values keep the client usable if
@@ -968,6 +969,8 @@ export class TwitterClient {
     };
 
     const features = {
+      rweb_video_screen_enabled: true,
+      creator_subscriptions_tweet_preview_api_enabled: true,
       premium_content_api_read_enabled: false,
       communities_web_enable_tweet_community_results_fetch: true,
       c9s_tweet_anatomy_moderator_badge_enabled: true,
@@ -1024,6 +1027,8 @@ export class TwitterClient {
     };
 
     const features = {
+      rweb_video_screen_enabled: true,
+      creator_subscriptions_tweet_preview_api_enabled: true,
       premium_content_api_read_enabled: false,
       communities_web_enable_tweet_community_results_fetch: true,
       c9s_tweet_anatomy_moderator_badge_enabled: true,
@@ -1065,20 +1070,43 @@ export class TwitterClient {
     variables: Record<string, unknown>,
     features: Record<string, boolean>,
   ): Promise<TweetResult> {
-    const url = `${TWITTER_API_BASE}/${QUERY_IDS.CreateTweet}/CreateTweet`;
+    const queryId = QUERY_IDS.CreateTweet;
+    const urlWithOperation = `${TWITTER_API_BASE}/${queryId}/CreateTweet`;
 
-    const body = JSON.stringify({
-      variables,
-      features,
-      queryId: QUERY_IDS.CreateTweet,
-    });
+    const body = JSON.stringify({ variables, features, queryId });
 
     try {
-      const response = await this.fetchWithTimeout(url, {
+      const response = await this.fetchWithTimeout(urlWithOperation, {
         method: 'POST',
         headers: this.getHeaders(),
         body,
       });
+
+      // Twitter increasingly prefers POST to /i/api/graphql with queryId in the payload.
+      // If the operation URL 404s, retry the generic endpoint.
+      if (response.status === 404) {
+        const retry = await this.fetchWithTimeout(TWITTER_GRAPHQL_POST_URL, {
+          method: 'POST',
+          headers: this.getHeaders(),
+          body,
+        });
+
+        if (!retry.ok) {
+          const text = await retry.text();
+          return { success: false, error: `HTTP ${retry.status}: ${text.slice(0, 200)}` };
+        }
+
+        const data = (await retry.json()) as CreateTweetResponse;
+
+        if (data.errors && data.errors.length > 0) {
+          return { success: false, error: data.errors.map((e) => e.message).join(', ') };
+        }
+
+        const tweetId = data.data?.create_tweet?.tweet_results?.result?.rest_id;
+        if (tweetId) return { success: true, tweetId };
+
+        return { success: false, error: 'Tweet created but no ID returned' };
+      }
 
       if (!response.ok) {
         const text = await response.text();

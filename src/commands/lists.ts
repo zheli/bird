@@ -76,7 +76,7 @@ export function registerListsCommand(program: Command, ctx: CliContext): void {
     .command('list-timeline <list-id-or-url>')
     .description('Get tweets from a list timeline')
     .option('-n, --count <number>', 'Number of tweets to fetch', '20')
-    .option('--all', 'Fetch all tweets from list (paged)')
+    .option('--all', 'Fetch all tweets from list (paged). WARNING: your account might get banned using this flag')
     .option('--max-pages <number>', 'Stop after N pages when using --all')
     .option('--cursor <string>', 'Resume pagination from a cursor')
     .option('--json', 'Output as JSON')

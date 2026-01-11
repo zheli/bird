@@ -4,6 +4,7 @@
 import type { AbstractConstructor, Mixin, TwitterClientBase } from './twitter-client-base.js';
 import { TWITTER_API_BASE } from './twitter-client-constants.js';
 import { buildListsFeatures } from './twitter-client-features.js';
+import { logDebugEvent } from './debug-log.js';
 import type { TimelineFetchOptions, TimelinePaginationOptions } from './twitter-client-timelines.js';
 import type { GraphqlTweetResult, ListsResult, SearchResult, TweetData, TwitterList } from './twitter-client-types.js';
 import { extractCursorFromInstructions, parseTweetsFromInstructions } from './twitter-client-utils.js';
@@ -357,10 +358,26 @@ export function withLists<TBase extends AbstractConstructor<TwitterClientBase>>(
       let pagesFetched = 0;
       const { includeRaw = false, maxPages } = options;
 
-      const fetchPage = async (pageCount: number, pageCursor?: string) => {
+      const fetchPage = async (
+        pageCount: number,
+        pageCursor?: string,
+      ): Promise<
+        | { success: true; tweets: TweetData[]; cursor?: string; had404: boolean }
+        | { success: false; error: string; had404: boolean; refresh?: boolean }
+      > => {
         let lastError: string | undefined;
         let had404 = false;
+        let refresh = false;
         const queryIds = await this.getListTimelineQueryIds();
+        const log = (event: string, details: Record<string, unknown> = {}) =>
+          logDebugEvent(event, {
+            listId,
+            queryIds,
+            pageCount,
+            pageCursor,
+            includeRaw,
+            ...details,
+          });
 
         const variables = {
           listId,
@@ -385,11 +402,18 @@ export function withLists<TBase extends AbstractConstructor<TwitterClientBase>>(
             if (response.status === 404) {
               had404 = true;
               lastError = `HTTP ${response.status}`;
+              log('list-timeline-http-404', { queryId, url, status: response.status });
               continue;
             }
 
             if (!response.ok) {
               const text = await response.text();
+              log('list-timeline-http-error', {
+                queryId,
+                url,
+                status: response.status,
+                snippet: text.slice(0, 500),
+              });
               return { success: false as const, error: `HTTP ${response.status}: ${text.slice(0, 200)}`, had404 };
             }
 
@@ -416,21 +440,41 @@ export function withLists<TBase extends AbstractConstructor<TwitterClientBase>>(
               errors?: Array<{ message: string }>;
             };
 
-            if (data.errors && data.errors.length > 0) {
-              return { success: false as const, error: data.errors.map((e) => e.message).join(', '), had404 };
-            }
-
             const instructions = data.data?.list?.tweets_timeline?.timeline?.instructions;
             const pageTweets = parseTweetsFromInstructions(instructions, { quoteDepth: this.quoteDepth, includeRaw });
             const nextCursor = extractCursorFromInstructions(instructions);
 
+            if (data.errors && data.errors.length > 0) {
+              log('list-timeline-graphql-errors', { queryId, url, errors: data.errors, tweetCount: pageTweets.length });
+              // If we still got tweets back, treat this as a partial success; otherwise fail and refresh IDs.
+              if (pageTweets.length === 0) {
+                refresh = true;
+                return {
+                  success: false as const,
+                  error: data.errors.map((e) => e.message).join(', '),
+                  had404,
+                  refresh,
+                };
+              }
+            }
+
+            log('list-timeline-success', {
+              queryId,
+              url,
+              tweetCount: pageTweets.length,
+              nextCursor,
+              hadErrors: Boolean(data.errors?.length),
+            });
+
             return { success: true as const, tweets: pageTweets, cursor: nextCursor, had404 };
           } catch (error) {
             lastError = error instanceof Error ? error.message : String(error);
+            log('list-timeline-exception', { queryId, url, error: lastError });
           }
         }
 
-        return { success: false as const, error: lastError ?? 'Unknown error fetching list timeline', had404 };
+        log('list-timeline-exhausted', { lastError, had404 });
+        return { success: false as const, error: lastError ?? 'Unknown error fetching list timeline', had404, refresh };
       };
 
       const fetchWithRefresh = async (pageCount: number, pageCursor?: string) => {
@@ -438,7 +482,7 @@ export function withLists<TBase extends AbstractConstructor<TwitterClientBase>>(
         if (firstAttempt.success) {
           return firstAttempt;
         }
-        if (firstAttempt.had404) {
+        if (firstAttempt.had404 || firstAttempt.refresh) {
           await this.refreshQueryIds();
           const secondAttempt = await fetchPage(pageCount, pageCursor);
           if (secondAttempt.success) {

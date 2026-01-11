@@ -4,6 +4,7 @@
 import type { Command } from 'commander';
 import type { CliContext } from '../cli/shared.js';
 import { extractListId } from '../lib/extract-list-id.js';
+import { logDebugEvent } from '../lib/debug-log.js';
 import type { TwitterList } from '../lib/twitter-client.js';
 import { TwitterClient } from '../lib/twitter-client.js';
 
@@ -90,6 +91,7 @@ export function registerListsCommand(program: Command, ctx: CliContext): void {
 
       const listId = extractListId(listIdOrUrl);
       if (!listId) {
+        logDebugEvent('list-timeline-invalid-id', { input: listIdOrUrl });
         console.error(`${ctx.p('err')}Invalid list ID or URL. Expected numeric ID or https://x.com/i/lists/<id>.`);
         process.exit(2);
       }
@@ -111,6 +113,7 @@ export function registerListsCommand(program: Command, ctx: CliContext): void {
       }
 
       if (!cookies.authToken || !cookies.ct0) {
+        logDebugEvent('list-timeline-missing-credentials', { listId, usePagination, count, maxPages, cursor: cmdOpts.cursor });
         console.error(`${ctx.p('err')}Missing required credentials`);
         process.exit(1);
       }
@@ -132,6 +135,15 @@ export function registerListsCommand(program: Command, ctx: CliContext): void {
           ctx.printTweets(result.tweets, { json: isJson, emptyMessage: 'No tweets found in this list.' });
         }
       } else {
+        logDebugEvent('list-timeline-error', {
+          listId,
+          usePagination,
+          count,
+          maxPages,
+          cursor: cmdOpts.cursor,
+          includeRaw,
+          error: result.error ?? 'unknown error',
+        });
         console.error(`${ctx.p('err')}Failed to fetch list timeline: ${result.error}`);
         process.exit(1);
       }

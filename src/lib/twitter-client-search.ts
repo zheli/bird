@@ -68,7 +68,11 @@ export function withSearch<TBase extends AbstractConstructor<TwitterClientBase>>
       return this.searchPaged(query, Number.POSITIVE_INFINITY, options);
     }
 
-    private async searchPaged(query: string, limit: number, options: SearchPaginationOptions = {}): Promise<SearchResult> {
+    private async searchPaged(
+      query: string,
+      limit: number,
+      options: SearchPaginationOptions = {},
+    ): Promise<SearchResult> {
       const features = buildSearchFeatures();
       const pageSize = 20;
       const seen = new Set<string>();

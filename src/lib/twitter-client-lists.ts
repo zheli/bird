@@ -4,14 +4,16 @@
 import type { AbstractConstructor, Mixin, TwitterClientBase } from './twitter-client-base.js';
 import { TWITTER_API_BASE } from './twitter-client-constants.js';
 import { buildListsFeatures } from './twitter-client-features.js';
-import type { TimelineFetchOptions } from './twitter-client-timelines.js';
-import type { GraphqlTweetResult, ListsResult, SearchResult, TwitterList } from './twitter-client-types.js';
-import { parseTweetsFromInstructions } from './twitter-client-utils.js';
+import { logDebugEvent } from './debug-log.js';
+import type { TimelineFetchOptions, TimelinePaginationOptions } from './twitter-client-timelines.js';
+import type { GraphqlTweetResult, ListsResult, SearchResult, TweetData, TwitterList } from './twitter-client-types.js';
+import { extractCursorFromInstructions, parseTweetsFromInstructions } from './twitter-client-utils.js';
 
 export interface TwitterClientListMethods {
   getOwnedLists(count?: number): Promise<ListsResult>;
   getListMemberships(count?: number): Promise<ListsResult>;
   getListTimeline(listId: string, count?: number, options?: TimelineFetchOptions): Promise<SearchResult>;
+  getAllListTimeline(listId: string, options?: TimelinePaginationOptions): Promise<SearchResult>;
 }
 
 interface GraphqlListResult {
@@ -329,24 +331,64 @@ export function withLists<TBase extends AbstractConstructor<TwitterClientBase>>(
      * Get tweets from a list timeline
      */
     async getListTimeline(listId: string, count = 20, options: TimelineFetchOptions = {}): Promise<SearchResult> {
-      const { includeRaw = false } = options;
+      return this.getListTimelinePaged(listId, count, options);
+    }
 
-      const variables = {
-        listId,
-        count,
-      };
+    /**
+     * Get all tweets from a list timeline (paginated)
+     */
+    async getAllListTimeline(listId: string, options?: TimelinePaginationOptions): Promise<SearchResult> {
+      return this.getListTimelinePaged(listId, Number.POSITIVE_INFINITY, options);
+    }
 
+    /**
+     * Internal paginated list timeline fetcher
+     */
+    private async getListTimelinePaged(
+      listId: string,
+      limit: number,
+      options: TimelinePaginationOptions = {},
+    ): Promise<SearchResult> {
       const features = buildListsFeatures();
+      const pageSize = 20;
+      const seen = new Set<string>();
+      const tweets: TweetData[] = [];
+      let cursor: string | undefined = options.cursor;
+      let nextCursor: string | undefined;
+      let pagesFetched = 0;
+      const { includeRaw = false, maxPages } = options;
 
-      const params = new URLSearchParams({
-        variables: JSON.stringify(variables),
-        features: JSON.stringify(features),
-      });
-
-      const tryOnce = async () => {
+      const fetchPage = async (
+        pageCount: number,
+        pageCursor?: string,
+      ): Promise<
+        | { success: true; tweets: TweetData[]; cursor?: string; had404: boolean }
+        | { success: false; error: string; had404: boolean; refresh?: boolean }
+      > => {
         let lastError: string | undefined;
         let had404 = false;
+        let refresh = false;
         const queryIds = await this.getListTimelineQueryIds();
+        const log = (event: string, details: Record<string, unknown> = {}) =>
+          logDebugEvent(event, {
+            listId,
+            queryIds,
+            pageCount,
+            pageCursor,
+            includeRaw,
+            ...details,
+          });
+
+        const variables = {
+          listId,
+          count: pageCount,
+          ...(pageCursor ? { cursor: pageCursor } : {}),
+        };
+
+        const params = new URLSearchParams({
+          variables: JSON.stringify(variables),
+          features: JSON.stringify(features),
+        });
 
         for (const queryId of queryIds) {
           const url = `${TWITTER_API_BASE}/${queryId}/ListLatestTweetsTimeline?${params.toString()}`;
@@ -360,11 +402,18 @@ export function withLists<TBase extends AbstractConstructor<TwitterClientBase>>(
             if (response.status === 404) {
               had404 = true;
               lastError = `HTTP ${response.status}`;
+              log('list-timeline-http-404', { queryId, url, status: response.status });
               continue;
             }
 
             if (!response.ok) {
               const text = await response.text();
+              log('list-timeline-http-error', {
+                queryId,
+                url,
+                status: response.status,
+                snippet: text.slice(0, 500),
+              });
               return { success: false as const, error: `HTTP ${response.status}: ${text.slice(0, 200)}`, had404 };
             }
 
@@ -391,37 +440,93 @@ export function withLists<TBase extends AbstractConstructor<TwitterClientBase>>(
               errors?: Array<{ message: string }>;
             };
 
+            const instructions = data.data?.list?.tweets_timeline?.timeline?.instructions;
+            const pageTweets = parseTweetsFromInstructions(instructions, { quoteDepth: this.quoteDepth, includeRaw });
+            const nextCursor = extractCursorFromInstructions(instructions);
+
             if (data.errors && data.errors.length > 0) {
-              return { success: false as const, error: data.errors.map((e) => e.message).join(', '), had404 };
+              log('list-timeline-graphql-errors', { queryId, url, errors: data.errors, tweetCount: pageTweets.length });
+              // If we still got tweets back, treat this as a partial success; otherwise fail and refresh IDs.
+              if (pageTweets.length === 0) {
+                refresh = true;
+                return {
+                  success: false as const,
+                  error: data.errors.map((e) => e.message).join(', '),
+                  had404,
+                  refresh,
+                };
+              }
             }
 
-            const instructions = data.data?.list?.tweets_timeline?.timeline?.instructions;
-            const tweets = parseTweetsFromInstructions(instructions, { quoteDepth: this.quoteDepth, includeRaw });
+            log('list-timeline-success', {
+              queryId,
+              url,
+              tweetCount: pageTweets.length,
+              nextCursor,
+              hadErrors: Boolean(data.errors?.length),
+            });
 
-            return { success: true as const, tweets, had404 };
+            return { success: true as const, tweets: pageTweets, cursor: nextCursor, had404 };
           } catch (error) {
             lastError = error instanceof Error ? error.message : String(error);
+            log('list-timeline-exception', { queryId, url, error: lastError });
           }
         }
 
-        return { success: false as const, error: lastError ?? 'Unknown error fetching list timeline', had404 };
+        log('list-timeline-exhausted', { lastError, had404 });
+        return { success: false as const, error: lastError ?? 'Unknown error fetching list timeline', had404, refresh };
       };
 
-      const firstAttempt = await tryOnce();
-      if (firstAttempt.success) {
-        return { success: true, tweets: firstAttempt.tweets };
-      }
-
-      if (firstAttempt.had404) {
-        await this.refreshQueryIds();
-        const secondAttempt = await tryOnce();
-        if (secondAttempt.success) {
-          return { success: true, tweets: secondAttempt.tweets };
+      const fetchWithRefresh = async (pageCount: number, pageCursor?: string) => {
+        const firstAttempt = await fetchPage(pageCount, pageCursor);
+        if (firstAttempt.success) {
+          return firstAttempt;
         }
-        return { success: false, error: secondAttempt.error };
+        if (firstAttempt.had404 || firstAttempt.refresh) {
+          await this.refreshQueryIds();
+          const secondAttempt = await fetchPage(pageCount, pageCursor);
+          if (secondAttempt.success) {
+            return secondAttempt;
+          }
+          return { success: false as const, error: secondAttempt.error };
+        }
+        return { success: false as const, error: firstAttempt.error };
+      };
+
+      const unlimited = !Number.isFinite(limit);
+      while (unlimited || tweets.length < limit) {
+        const pageCount = unlimited ? pageSize : Math.min(pageSize, limit - tweets.length);
+        const page = await fetchWithRefresh(pageCount, cursor);
+        if (!page.success) {
+          return { success: false, error: page.error };
+        }
+        pagesFetched += 1;
+
+        for (const tweet of page.tweets) {
+          if (seen.has(tweet.id)) {
+            continue;
+          }
+          seen.add(tweet.id);
+          tweets.push(tweet);
+          if (!unlimited && tweets.length >= limit) {
+            break;
+          }
+        }
+
+        const pageCursor = page.cursor;
+        if (!pageCursor || pageCursor === cursor || page.tweets.length === 0) {
+          nextCursor = undefined;
+          break;
+        }
+        if (maxPages && pagesFetched >= maxPages) {
+          nextCursor = pageCursor;
+          break;
+        }
+        cursor = pageCursor;
+        nextCursor = pageCursor;
       }
 
-      return { success: false, error: firstAttempt.error };
+      return { success: true, tweets, nextCursor };
     }
   }
 

@@ -13,9 +13,12 @@
 import { createProgram, KNOWN_COMMANDS } from './cli/program.js';
 import { createCliContext } from './cli/shared.js';
 import { resolveCliInvocation } from './lib/cli-args.js';
+import { installDebugLogger } from './lib/debug-log.js';
 
 const rawArgs: string[] = process.argv.slice(2);
 const normalizedArgs: string[] = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs;
+
+installDebugLogger();
 
 const ctx = createCliContext(normalizedArgs);
 

@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@steipete/sweet-cookie':
-    hash: 05180a0fa74ba5074775f965db7d4561e59ba51978bd5e955c0e4f058a4ed340
+    hash: 4ff44e9d3b5770a7b751c7a3470572bdf485763c28ead8055468dd0ae9a6e986
     path: patches/@steipete__sweet-cookie.patch
 
 importers:
@@ -15,7 +15,7 @@ importers:
     dependencies:
       '@steipete/sweet-cookie':
         specifier: 0.1.0
-        version: 0.1.0(patch_hash=05180a0fa74ba5074775f965db7d4561e59ba51978bd5e955c0e4f058a4ed340)
+        version: 0.1.0(patch_hash=4ff44e9d3b5770a7b751c7a3470572bdf485763c28ead8055468dd0ae9a6e986)
       commander:
         specifier: ^14.0.2
         version: 14.0.2
@@ -1056,7 +1056,7 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@steipete/sweet-cookie@0.1.0(patch_hash=05180a0fa74ba5074775f965db7d4561e59ba51978bd5e955c0e4f058a4ed340)': {}
+  '@steipete/sweet-cookie@0.1.0(patch_hash=4ff44e9d3b5770a7b751c7a3470572bdf485763c28ead8055468dd0ae9a6e986)': {}
 
   '@types/chai@5.2.3':
     dependencies:

@@ -54,7 +54,7 @@ index 71c815f77378d03e07061976ac372b3a55a61ac4..b21c15640955a8e7faa8f1d6ea6fed7c
          return { cookies: [], warnings };
      }
      // Chromium uses PBKDF2(password, "saltysalt", 1003, 16, sha1) for AES-128-CBC cookie values on macOS.
-@@ -46,15 +64,19 @@ export async function getCookiesFromChromeSqliteMac(options, origins, allowlistN
+@@ -46,14 +64,18 @@ export async function getCookiesFromChromeSqliteMac(options, origins, allowlistN
      result.warnings.unshift(...warnings);
      return result;
  }

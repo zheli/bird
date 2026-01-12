@@ -328,39 +328,72 @@ export function registerUserCommands(program: Command, ctx: CliContext): void {
     .command('likes')
     .description('Get your liked tweets')
     .option('-n, --count <number>', 'Number of likes to fetch', '20')
+    .option('--all', 'Fetch all likes (paged)')
+    .option('--max-pages <number>', 'Stop after N pages when using --all')
+    .option('--cursor <string>', 'Resume pagination from a cursor')
     .option('--json', 'Output as JSON')
     .option('--json-full', 'Output as JSON with full raw API response in _raw field')
-    .action(async (cmdOpts: { count?: string; json?: boolean; jsonFull?: boolean }) => {
-      const opts = program.opts();
-      const timeoutMs = ctx.resolveTimeoutFromOptions(opts);
-      const quoteDepth = ctx.resolveQuoteDepthFromOptions(opts);
-      const count = Number.parseInt(cmdOpts.count || '20', 10);
+    .action(
+      async (cmdOpts: {
+        count?: string;
+        json?: boolean;
+        jsonFull?: boolean;
+        all?: boolean;
+        maxPages?: string;
+        cursor?: string;
+      }) => {
+        const opts = program.opts();
+        const timeoutMs = ctx.resolveTimeoutFromOptions(opts);
+        const quoteDepth = ctx.resolveQuoteDepthFromOptions(opts);
+        const count = Number.parseInt(cmdOpts.count || '20', 10);
+        const maxPages = cmdOpts.maxPages ? Number.parseInt(cmdOpts.maxPages, 10) : undefined;
 
-      const { cookies, warnings } = await ctx.resolveCredentialsFromOptions(opts);
+        const { cookies, warnings } = await ctx.resolveCredentialsFromOptions(opts);
 
-      for (const warning of warnings) {
-        console.error(`${ctx.p('warn')}${warning}`);
-      }
+        for (const warning of warnings) {
+          console.error(`${ctx.p('warn')}${warning}`);
+        }
 
-      if (!cookies.authToken || !cookies.ct0) {
-        console.error(`${ctx.p('err')}Missing required credentials`);
-        process.exit(1);
-      }
+        if (!cookies.authToken || !cookies.ct0) {
+          console.error(`${ctx.p('err')}Missing required credentials`);
+          process.exit(1);
+        }
 
-      const client = new TwitterClient({ cookies, timeoutMs, quoteDepth });
-      const includeRaw = cmdOpts.jsonFull ?? false;
-      const result = await client.getLikes(count, { includeRaw });
+        const usePagination = cmdOpts.all || cmdOpts.cursor;
+        if (maxPages !== undefined && !usePagination) {
+          console.error(`${ctx.p('err')}--max-pages requires --all or --cursor.`);
+          process.exit(1);
+        }
+        if (!usePagination && (!Number.isFinite(count) || count <= 0)) {
+          console.error(`${ctx.p('err')}Invalid --count. Expected a positive integer.`);
+          process.exit(1);
+        }
+        if (maxPages !== undefined && (!Number.isFinite(maxPages) || maxPages <= 0)) {
+          console.error(`${ctx.p('err')}Invalid --max-pages. Expected a positive integer.`);
+          process.exit(1);
+        }
 
-      if (result.success) {
-        ctx.printTweets(result.tweets, {
-          json: cmdOpts.json || cmdOpts.jsonFull,
-          emptyMessage: 'No liked tweets found.',
-        });
-      } else {
-        console.error(`${ctx.p('err')}Failed to fetch likes: ${result.error}`);
-        process.exit(1);
-      }
-    });
+        const client = new TwitterClient({ cookies, timeoutMs, quoteDepth });
+        const includeRaw = cmdOpts.jsonFull ?? false;
+        const timelineOptions = { includeRaw };
+        const paginationOptions = { includeRaw, maxPages, cursor: cmdOpts.cursor };
+        const result = usePagination
+          ? await client.getAllLikes(paginationOptions)
+          : await client.getLikes(count, timelineOptions);
+
+        if (result.success) {
+          const isJson = Boolean(cmdOpts.json || cmdOpts.jsonFull);
+          ctx.printTweetsResult(result, {
+            json: isJson,
+            usePagination: Boolean(usePagination),
+            emptyMessage: 'No liked tweets found.',
+          });
+        } else {
+          console.error(`${ctx.p('err')}Failed to fetch likes: ${result.error}`);
+          process.exit(1);
+        }
+      },
+    );
 
   program
     .command('whoami')

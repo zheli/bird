@@ -21,6 +21,7 @@ export interface TwitterClientTimelineMethods {
   getBookmarks(count?: number, options?: TimelineFetchOptions): Promise<SearchResult>;
   getAllBookmarks(options?: TimelinePaginationOptions): Promise<SearchResult>;
   getLikes(count?: number, options?: TimelineFetchOptions): Promise<SearchResult>;
+  getAllLikes(options?: TimelinePaginationOptions): Promise<SearchResult>;
   getBookmarkFolderTimeline(folderId: string, count?: number, options?: TimelineFetchOptions): Promise<SearchResult>;
   getAllBookmarkFolderTimeline(folderId: string, options?: TimelinePaginationOptions): Promise<SearchResult>;
 }
@@ -75,18 +76,27 @@ export function withTimelines<TBase extends AbstractConstructor<TwitterClientBas
      * Get the authenticated user's liked tweets
      */
     async getLikes(count = 20, options: TimelineFetchOptions = {}): Promise<SearchResult> {
-      const { includeRaw = false } = options;
+      return this.getLikesPaged(count, options);
+    }
+
+    async getAllLikes(options?: TimelinePaginationOptions): Promise<SearchResult> {
+      return this.getLikesPaged(Number.POSITIVE_INFINITY, options);
+    }
+
+    private async getLikesPaged(limit: number, options: TimelinePaginationOptions = {}): Promise<SearchResult> {
       const userResult = await this.getCurrentUser();
       if (!userResult.success || !userResult.user) {
         return { success: false, error: userResult.error ?? 'Could not determine current user' };
       }
-
       const userId = userResult.user.id;
+      const features = buildLikesFeatures();
       const pageSize = 20;
       const seen = new Set<string>();
       const tweets: TweetData[] = [];
-      let cursor: string | undefined;
-      const features = buildLikesFeatures();
+      let cursor: string | undefined = options.cursor;
+      let nextCursor: string | undefined;
+      let pagesFetched = 0;
+      const { includeRaw = false, maxPages } = options;
 
       const fetchPage = async (pageCount: number, pageCursor?: string) => {
         let lastError: string | undefined;
@@ -164,9 +174,9 @@ export function withTimelines<TBase extends AbstractConstructor<TwitterClientBas
               }
             }
             const pageTweets = parseTweetsFromInstructions(instructions, { quoteDepth: this.quoteDepth, includeRaw });
-            const nextCursor = extractCursorFromInstructions(instructions);
+            const extractedCursor = extractCursorFromInstructions(instructions);
 
-            return { success: true as const, tweets: pageTweets, cursor: nextCursor, had404 };
+            return { success: true as const, tweets: pageTweets, cursor: extractedCursor, had404 };
           } catch (error) {
             lastError = error instanceof Error ? error.message : String(error);
           }
@@ -194,12 +204,14 @@ export function withTimelines<TBase extends AbstractConstructor<TwitterClientBas
         return { success: false as const, error: firstAttempt.error };
       };
 
-      while (tweets.length < count) {
-        const pageCount = Math.min(pageSize, count - tweets.length);
+      const unlimited = !Number.isFinite(limit);
+      while (unlimited || tweets.length < limit) {
+        const pageCount = unlimited ? pageSize : Math.min(pageSize, limit - tweets.length);
         const page = await fetchWithRefresh(pageCount, cursor);
         if (!page.success) {
           return { success: false, error: page.error };
         }
+        pagesFetched += 1;
 
         let added = 0;
         for (const tweet of page.tweets) {
@@ -209,18 +221,25 @@ export function withTimelines<TBase extends AbstractConstructor<TwitterClientBas
           seen.add(tweet.id);
           tweets.push(tweet);
           added += 1;
-          if (tweets.length >= count) {
+          if (!unlimited && tweets.length >= limit) {
             break;
           }
         }
 
-        if (!page.cursor || page.cursor === cursor || page.tweets.length === 0 || added === 0) {
+        const pageCursor = page.cursor;
+        if (!pageCursor || pageCursor === cursor || page.tweets.length === 0 || added === 0) {
+          nextCursor = undefined;
           break;
         }
-        cursor = page.cursor;
+        if (maxPages && pagesFetched >= maxPages) {
+          nextCursor = pageCursor;
+          break;
+        }
+        cursor = pageCursor;
+        nextCursor = pageCursor;
       }
 
-      return { success: true, tweets };
+      return { success: true, tweets, nextCursor };
     }
 
     /**

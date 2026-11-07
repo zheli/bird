@@ -17,6 +17,7 @@ import {
 import type { TweetData } from '../lib/twitter-client.js';
 
 export type BirdConfig = {
+  credentialsFile?: string;
   chromeProfile?: string;
   firefoxProfile?: string;
   cookieSource?: CookieSource | CookieSource[];
@@ -171,6 +172,7 @@ function loadConfig(warn: (message: string) => void): BirdConfig {
 }
 
 type CredentialsOptions = {
+  credentialsFile?: string;
   authToken?: string;
   ct0?: string;
   chromeProfile?: string;
@@ -281,6 +283,7 @@ export function createCliContext(normalizedArgs: string[], env: NodeJS.ProcessEn
       ? opts.cookieSource
       : (resolveCookieSourceOrder(config.cookieSource) ?? COOKIE_SOURCES);
     return resolveCredentials({
+      credentialsFile: opts.credentialsFile || env.BIRD_CREDENTIALS_FILE || config.credentialsFile,
       authToken: opts.authToken,
       ct0: opts.ct0,
       cookieSource,

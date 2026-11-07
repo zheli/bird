@@ -4,6 +4,7 @@
  */
 
 import { getCookies } from '@steipete/sweet-cookie';
+import { readCredentialsFile } from './credentials-file.js';
 
 export interface TwitterCookies {
   authToken: string | null;
@@ -165,9 +166,10 @@ export async function extractCookiesFromFirefox(profile?: string): Promise<Cooki
 
 /**
  * Resolve Twitter credentials from multiple sources.
- * Priority: CLI args > environment variables > browsers (ordered).
+ * An explicit credentials file is used exclusively; otherwise CLI args > environment > browsers.
  */
 export async function resolveCredentials(options: {
+  credentialsFile?: string;
   authToken?: string;
   ct0?: string;
   cookieSource?: CookieSource | CookieSource[];
@@ -176,6 +178,17 @@ export async function resolveCredentials(options: {
   cookieTimeoutMs?: number;
 }): Promise<CookieExtractionResult> {
   const warnings: string[] = [];
+  if (options.credentialsFile) {
+    const saved = await readCredentialsFile(options.credentialsFile);
+    return {
+      cookies: {
+        ...saved,
+        cookieHeader: cookieHeader(saved.authToken, saved.ct0),
+        source: `credentials file ${options.credentialsFile}`,
+      },
+      warnings,
+    };
+  }
   const cookies = buildEmpty();
   const cookieTimeoutMs =
     typeof options.cookieTimeoutMs === 'number' &&

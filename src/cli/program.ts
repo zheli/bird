@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { registerBookmarksCommand } from '../commands/bookmarks.js';
 import { registerCheckCommand } from '../commands/check.js';
+import { registerExportCredentialsCommand } from '../commands/export-credentials.js';
 import { registerHelpCommand } from '../commands/help.js';
 import { registerHomeCommand } from '../commands/home.js';
 import { registerListsCommand } from '../commands/lists.js';
@@ -38,6 +39,7 @@ export const KNOWN_COMMANDS = new Set([
   'help',
   'whoami',
   'check',
+  'export-credentials',
 ]);
 
 export function createProgram(ctx: CliContext): Command {
@@ -105,13 +107,14 @@ export function createProgram(ctx: CliContext): Command {
       `\n\n${ctx.colors.section('Config')}\n${ctx.colors.muted(
         `  Reads ${ctx.colors.argument('~/.config/bird/config.json5')} and ${ctx.colors.argument('./.birdrc.json5')} (JSON5)`,
       )}\n${ctx.colors.muted(
-        `  Supports: chromeProfile, firefoxProfile, cookieSource, cookieTimeoutMs, timeoutMs, quoteDepth`,
+        `  Supports: credentialsFile, chromeProfile, firefoxProfile, cookieSource, cookieTimeoutMs, timeoutMs, quoteDepth`,
       )}\n\n${ctx.colors.section('Env')}\n${ctx.colors.muted(
-        `  ${ctx.colors.option('NO_COLOR')}, ${ctx.colors.option('BIRD_TIMEOUT_MS')}, ${ctx.colors.option('BIRD_COOKIE_TIMEOUT_MS')}, ${ctx.colors.option('BIRD_QUOTE_DEPTH')}`,
+        `  ${ctx.colors.option('BIRD_CREDENTIALS_FILE')}, ${ctx.colors.option('NO_COLOR')}, ${ctx.colors.option('BIRD_TIMEOUT_MS')}, ${ctx.colors.option('BIRD_COOKIE_TIMEOUT_MS')}, ${ctx.colors.option('BIRD_QUOTE_DEPTH')}`,
       )}`,
   );
 
   program
+    .option('--credentials-file <path>', 'Read exported credentials from a JSON file (no browser fallback)')
     .option('--auth-token <token>', 'Twitter auth_token cookie')
     .option('--ct0 <token>', 'Twitter ct0 cookie')
     .option('--chrome-profile <name>', 'Chrome profile name for cookie extraction', ctx.config.chromeProfile)
@@ -143,6 +146,7 @@ export function createProgram(ctx: CliContext): Command {
   registerUserTweetsCommand(program, ctx);
   registerNewsCommand(program, ctx);
   registerCheckCommand(program, ctx);
+  registerExportCredentialsCommand(program, ctx);
 
   return program;
 }
